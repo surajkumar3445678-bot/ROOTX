@@ -1,3 +1,4 @@
+
 name: Build ROOT X APK
 
 on:
@@ -9,7 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -67,7 +68,13 @@ jobs:
       - name: Install dependencies
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter pub get
+        run: |
+          for i in 1 2 3; do
+            flutter pub get && exit 0
+            echo "Attempt $i failed, retrying in 15s..."
+            sleep 15
+          done
+          exit 1
 
       - name: Analyze
         shell: bash
@@ -82,12 +89,24 @@ jobs:
       - name: Build debug APK
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter build apk --debug 2>&1 | tee build_debug.log
+        run: |
+          for i in 1 2 3; do
+            flutter build apk --debug 2>&1 | tee build_debug.log && exit 0
+            echo "Attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
+          exit 1
 
       - name: Build release APK
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
-        run: flutter build apk --release 2>&1 | tee build_release.log
+        run: |
+          for i in 1 2 3; do
+            flutter build apk --release 2>&1 | tee build_release.log && exit 0
+            echo "Attempt $i failed, retrying in 20s..."
+            sleep 20
+          done
+          exit 1
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4

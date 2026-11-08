@@ -1,0 +1,105 @@
+name: Build ROOT X APK
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate Flutter project (handles uploaded ZIP and nested folders)
+        shell: bash
+        run: |
+          set -e
+          PUB=$(find . -name pubspec.yaml -not -path '*/.*/*' -not -path '*/build/*' | head -n 1 || true)
+          if [ -z "$PUB" ]; then
+            ZIP=$(find . -maxdepth 2 -iname '*.zip' -not -path './.git/*' | head -n 1 || true)
+            if [ -n "$ZIP" ]; then
+              echo "No pubspec.yaml found, extracting $ZIP"
+              mkdir -p _unzipped
+              unzip -q -o "$ZIP" -d _unzipped
+              PUB=$(find _unzipped -name pubspec.yaml -not -path '*/build/*' | head -n 1 || true)
+            fi
+          fi
+          if [ -z "$PUB" ]; then
+            echo "::error::pubspec.yaml not found in repository or in any ZIP"
+            exit 1
+          fi
+          DIR=$(dirname "$PUB")
+          echo "Project directory: $DIR"
+          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter and Android toolchain info
+        shell: bash
+        run: |
+          flutter --version
+          yes | flutter doctor --android-licenses > /dev/null 2>&1 || true
+          flutter doctor -v || true
+
+      - name: Ensure Android scaffold (adds missing Gradle files, keeps ours)
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -e
+          NAME=$(grep -m1 '^name:' pubspec.yaml | awk '{print $2}')
+          flutter create --platforms=android --org com.rootx --project-name "$NAME" "$RUNNER_TEMP/scaffold"
+          mkdir -p android
+          cp -rn "$RUNNER_TEMP/scaffold/android/." android/
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
+          grep -n "minSdk" android/app/build.gradle* || true
+
+      - name: Install dependencies
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter pub get
+
+      - name: Analyze
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee analyze.log
+
+      - name: Test
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter test 2>&1 | tee test.log
+
+      - name: Build debug APK
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter build apk --debug 2>&1 | tee build_debug.log
+
+      - name: Build release APK
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter build apk --release 2>&1 | tee build_release.log
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROOT-X-APKs
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: ${{ env.PROJECT_DIR }}/*.log
+          if-no-files-found: ignore

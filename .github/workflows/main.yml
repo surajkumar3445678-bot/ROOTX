@@ -64,13 +64,42 @@ jobs:
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
           grep -n "minSdk" android/app/build.gradle* || true
 
-      - name: Use official Gradle download server
+      - name: Pre-download Gradle (mirrors + retries)
         shell: bash
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           PROP=android/gradle/wrapper/gradle-wrapper.properties
-          sed -i 's#github.com/gradle/gradle-distributions/releases/download/v[0-9.]*#services.gradle.org/distributions#; s#-all\.zip#-bin.zip#' "$PROP"
           grep distributionUrl "$PROP"
+          V=$(grep distributionUrl "$PROP" | sed -E 's/.*gradle-([0-9.]+)-(all|bin)\.zip.*/\1/')
+          echo "Gradle version: $V"
+          OUT="$RUNNER_TEMP/gradle-$V-bin.zip"
+          URLS="
+          https://services.gradle.org/distributions/gradle-$V-bin.zip
+          https://downloads.gradle.org/distributions/gradle-$V-bin.zip
+          https://mirrors.cloud.tencent.com/gradle/gradle-$V-bin.zip
+          https://mirrors.huaweicloud.com/gradle/gradle-$V-bin.zip
+          "
+          OK=0
+          for round in 1 2 3; do
+            for u in $URLS; do
+              echo "Trying $u"
+              rm -f "$OUT"
+              if curl -fL --retry 2 --connect-timeout 20 --max-time 300 -o "$OUT" "$u" && unzip -tq "$OUT" > /dev/null 2>&1; then
+                OK=1
+                break 2
+              fi
+            done
+            echo "Round $round failed, waiting 20s..."
+            sleep 20
+          done
+          if [ "$OK" = "1" ]; then
+            sed -i '/^distributionUrl=/d' "$PROP"
+            echo "distributionUrl=file\\://$OUT" >> "$PROP"
+            echo "Using local Gradle:"
+            grep distributionUrl "$PROP"
+          else
+            echo "::warning::Could not pre-download Gradle, using the default wrapper download"
+          fi
 
       - name: Install dependencies
         shell: bash
